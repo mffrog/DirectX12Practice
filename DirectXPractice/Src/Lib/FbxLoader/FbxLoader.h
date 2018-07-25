@@ -1,28 +1,45 @@
-#pragma once
-#include "fbxsdk.h"
+﻿#ifndef FbxLoader_h
+#define FbxLoader_h
+
+#include <fbxsdk.h>
 #include "FbxLoaderStructs.h"
+#include <string>
 #include <vector>
 
 namespace FbxLoader {
+	/*
+	Fbx読み込みクラス
+	*/
 	class Loader {
 	public:
-		enum AxisType {
-			RightHand,
-			LeftHand,
-		};
 		~Loader();
-		bool Initialize(const char* filename);
-
-		void LoadStaticMeshes(std::vector<StaticMesh>& meshes);
+		bool Initialize(const std::string& filename);
+		void SetBoneBaseGetFromLink(bool flag) { boneBaseGetFromLink = flag; }
+		void LoadBone(BoneTreeData& boneTree);
+		void LoadAllMesh(std::vector<StaticMesh>& staticMeshes, std::vector<SkinnedMesh>& skinnedMeshes);
 		void LoadSkinnedMesh(std::vector<SkinnedMesh>& meshes);
-	private:
-		void GetMeshNodes();
+		void LoadStaticMesh(std::vector<StaticMesh>& meshes);
+		void LoadAnimation(std::vector<Animation>& animations);
 
-		void LoadStaticMesh(fbxsdk::FbxMesh* mesh, StaticMesh& meshData);
 	private:
-		FbxManager* manager;
-		FbxScene* scene;
-		AxisType axisType = RightHand;
-		std::vector<fbxsdk::FbxMesh*> meshNodes;
+
+		fbxsdk::FbxNode* FindRootBone(fbxsdk::FbxNode* node);
+		fbxsdk::FbxMesh* FindIncludedMesh(fbxsdk::FbxCluster* cluster);
+		void LoadSkinnedMesh(fbxsdk::FbxMesh* mesh, SkinnedMesh& meshRef);
+		void LoadStaticeMesh(fbxsdk::FbxMesh* mesh, StaticMesh& meshRef);
+
+
+		bool isBoneTreeInitialized = false;
+		bool boneBaseGetFromLink = true;
+		BoneTreeData publicBoneTree;
+
+		fbxsdk::FbxManager* pManager = nullptr;
+		fbxsdk::FbxImporter* pImporter = nullptr;
+		fbxsdk::FbxScene* pScene = nullptr;
+
+		std::vector<fbxsdk::FbxMesh*> includedMeshes;
 	};
-} // namespace FbxLoader
+
+}// namespace FbxLoader
+#endif /* FbxLoader_h */
+

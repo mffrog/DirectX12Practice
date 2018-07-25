@@ -10,7 +10,10 @@
 #include "Math/Vector/Vector3.h"
 #include "Math/Vector/Vector4.h"
 
-#define MODEL_FILE "Res/cube.fbx"
+#include "Lib/FbxLoader/FbxLoader.h"
+
+#define MODEL_FILE	"Res/chara_mesh.fbx"
+#define ANIM_FILE	"Res/chara_animation_all.fbx"
 
 using namespace DirectX;
 using Microsoft::WRL::ComPtr;
@@ -48,6 +51,10 @@ ComPtr<ID3D12Resource> fbxVertexBuffer;
 D3D12_VERTEX_BUFFER_VIEW fbxVertexBufferView;
 ComPtr<ID3D12Resource> fbxIndexBuffer;
 D3D12_INDEX_BUFFER_VIEW fbxIndexBufferView;
+std::vector<size_t> baseVertex;
+std::vector<size_t> baseIndex;
+std::vector<size_t> indexCount;
+
 int fbxIndexCount;
 D3D12_VIEWPORT viewport;
 D3D12_RECT scissorRect;
@@ -79,30 +86,53 @@ struct Vertex {
 	XMFLOAT2 texcoord;
 };
 
-mff::Vector3<float> eyePosition(0.0f, 0.0f, -250.0f);
+mff::Vector3<float> eyePosition(0.0f, 0.0f, -50.0f);
 mff::Vector3<float> eyeDirection(0.0f, 0.0f, 1.0f);
 mff::Vector2<float> mousePos;
 bool mpInit = false;
-/*
+
 struct InputLayoutConfig {
+	enum FormatType {
+		Float,
+		Int,
+		Uint,
+		FormatTypeSize,
+	};
 	enum Classification {
 		Classification_PerVertex,
 		Classification_PerInstance,
 	};
+	InputLayoutConfig() = default;
 	InputLayoutConfig(int num) {
 		elements.reserve(num);
 	}
-	void AddElement(const char* semanticName, size_t count, Classification classification) {
+	void AddElement(const char* semanticName, FormatType fType, size_t count, Classification classification) {
 		DXGI_FORMAT format;
-		switch (count)
+		UINT elementSize = count;
+
+		switch (fType)
 		{
-		case 3:
-			format = DXGI_FORMAT_R32G32B32_FLOAT;
+		case InputLayoutConfig::Float:
+			elementSize *= sizeof(float);
 			break;
-		case 4:
-			format = DXGI_FORMAT_R32G32B32A32_FLOAT;
+		case InputLayoutConfig::Int:
+			elementSize *= sizeof(int);
+			break;
+		case InputLayoutConfig::Uint:
+			elementSize *= sizeof(UINT);
+			break;
+		default:
 			break;
 		}
+
+		DXGI_FORMAT formats[FormatTypeSize][4] = {
+			{ DXGI_FORMAT_R32_FLOAT, DXGI_FORMAT_R32G32_FLOAT, DXGI_FORMAT_R32G32B32_FLOAT, DXGI_FORMAT_R32G32B32A32_FLOAT },
+			{ DXGI_FORMAT_R32_SINT, DXGI_FORMAT_R32G32_SINT, DXGI_FORMAT_R32G32B32_SINT, DXGI_FORMAT_R32G32B32A32_SINT },
+			{ DXGI_FORMAT_R32_UINT, DXGI_FORMAT_R32G32_UINT, DXGI_FORMAT_R32G32B32_UINT, DXGI_FORMAT_R32G32B32A32_UINT},
+	
+		};
+		format = formats[fType][count - 1];
+
 		D3D12_INPUT_CLASSIFICATION ic;
 		switch (classification)
 		{
@@ -114,15 +144,23 @@ struct InputLayoutConfig {
 		default:
 			break;
 		}
-		elements.push_back({ semanticName, 0, format, 0, offset, ic, 0 });
+		elements.push_back({ semanticName, 0U, format, 0U, offset, ic, 0U });
+		offset += elementSize;
 	}
 	D3D12_INPUT_ELEMENT_DESC* Get() {
 		return elements.data();
 	}
+
+	size_t GetElementsNum() const {
+		return elements.size();
+	}
+
 	std::vector<D3D12_INPUT_ELEMENT_DESC> elements;
-	int offset = 0;
+	UINT offset = 0;
 };
-*/
+
+InputLayoutConfig pctLayout(3);
+//InputLayoutConfig animationLayout;
 
 class DescriptorList {
 public:
@@ -251,41 +289,42 @@ private:
 };
 
 ResourceDescriptorList csuDescriptorList;
-size_t csuDescriptorIndex[2];
+const size_t resourceDescriptorCount = 3;
+size_t csuDescriptorIndex[resourceDescriptorCount];
 
 ConstantBuffer constantBuffer;
-int constantIndex[2];
+int constantIndex[3];
 
 //頂点データインプットレイアウト
-const D3D12_INPUT_ELEMENT_DESC vertexLayout[] = {
-	{
-		"POSITION",
-		0,
-		DXGI_FORMAT_R32G32B32_FLOAT,
-		0,
-		0,
-		D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA,
-		0
-	},
-	{
-		"COLOR",
-		0,
-		DXGI_FORMAT_R32G32B32A32_FLOAT,
-		0,
-		12,
-		D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA,
-		0
-	},
-	{
-		"TEXCOORD",
-		0,
-		DXGI_FORMAT_R32G32_FLOAT,
-		0,
-		28,
-		D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA,
-		0
-	}
-};
+//const D3D12_INPUT_ELEMENT_DESC vertexLayout[] = {
+//	{
+//		"POSITION",
+//		0,
+//		DXGI_FORMAT_R32G32B32_FLOAT,
+//		0,
+//		0,
+//		D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA,
+//		0
+//	},
+//	{
+//		"COLOR",
+//		0,
+//		DXGI_FORMAT_R32G32B32A32_FLOAT,
+//		0,
+//		12,
+//		D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA,
+//		0
+//	},
+//	{
+//		"TEXCOORD",
+//		0,
+//		DXGI_FORMAT_R32G32_FLOAT,
+//		0,
+//		28,
+//		D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA,
+//		0
+//	}
+//};
 
 //頂点データ
 const Vertex vertices[] = {
@@ -478,6 +517,8 @@ bool InitializeD3D() {
 	XMMATRIX tmp;
 	constantIndex[0] = constantBuffer.AddData(&tmp, sizeof(tmp));
 	constantIndex[1] = constantBuffer.AddData(&tmp, sizeof(tmp));
+	constantIndex[2] = constantBuffer.AddData(&tmp, sizeof(tmp));
+
 	//{
 	//	// ヒーププロパティの設定.
 	//	D3D12_HEAP_PROPERTIES prop = {};
@@ -525,7 +566,7 @@ bool InitializeD3D() {
 	//	cbvHandle.ptr += incrementSize;
 	//}
 
-	for (int i = 0; i < 2; ++i) {
+	for (int i = 0; i < resourceDescriptorCount; ++i) {
 		csuDescriptorIndex[i] = csuDescriptorList.AddConstantDescriptor(constantBuffer.GetGpuVirtualAddress(constantIndex[i]), 0x100);
 	}
 
@@ -624,6 +665,9 @@ bool Render() {
 	XMStoreFloat4x4(&view, XMMatrixTranspose(matView));
 	XMFLOAT4X4 projection;
 	XMStoreFloat4x4(&projection, XMMatrixTranspose(matProj));
+	XMFLOAT4X4 world;
+	mff::Vector3<float> position;
+	XMStoreFloat4x4(&world, XMMatrixTranspose(XMMatrixTranslation(position.x, position.y, position.z)));
 	{
 		void* pConstantResrouce;
 		D3D12_RANGE range = { 0,0 };
@@ -637,6 +681,7 @@ bool Render() {
 			constantsResource->Unmap(0, nullptr);*/
 		constantBuffer.Update(constantIndex[0], &view, sizeof(view));
 		constantBuffer.Update(constantIndex[1], &projection, sizeof(projection));
+		constantBuffer.Update(constantIndex[2], &world, sizeof(world));
 	}
 
 	commandList->ResourceBarrier(
@@ -665,7 +710,7 @@ bool Render() {
 	commandList->SetGraphicsRootSignature(rootSignature.Get());
 	//commandList->SetGraphicsRootDescriptorTable(0, texCircle.handle);
 	commandList->SetGraphicsRootDescriptorTable(1, csuDescriptorList.GetHandle(csuDescriptorIndex[0]));
-	commandList->SetGraphicsRoot32BitConstants(2, 16, &mat, 0);
+	//commandList->SetGraphicsRoot32BitConstants(2, 16, &mat, 0);
 	commandList->RSSetViewports(1, &viewport);
 	commandList->RSSetScissorRects(1, &scissorRect);
 	commandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
@@ -745,7 +790,26 @@ bool LoadShader(const wchar_t* filename, const char* target, ID3DBlob** blob) {
 	return true;
 }
 
+struct RootSignature {
+
+};
+
+class GraphicsPipeLine {
+public:
+	bool SetVertexShader(const wchar_t* filename, const char* target);
+	bool SetPixelShader(const wchar_t* filename, const char* target);
+	bool AddResourceBlock(size_t blockCount, size_t bindIndex = 0);
+	bool AddParameterBlock(size_t blockCount, size_t bindIndex = 0);
+	bool AddSampler();
+private:
+	
+};
+
 bool CreatePSO() {
+	pctLayout.AddElement("POSITION", InputLayoutConfig::FormatType::Float, 3, InputLayoutConfig::Classification::Classification_PerVertex);
+	pctLayout.AddElement("COLOR",InputLayoutConfig::FormatType::Float, 4, InputLayoutConfig::Classification::Classification_PerVertex);
+	pctLayout.AddElement("TEXCOORD", InputLayoutConfig::FormatType::Float, 2, InputLayoutConfig::Classification::Classification_PerVertex);
+
 	ComPtr<ID3DBlob> vertexShaderBlob;
 	if (!LoadShader(L"Res/VertexShader.hlsl", "vs_5_0", &vertexShaderBlob)) {
 		return false;
@@ -759,12 +823,12 @@ bool CreatePSO() {
 		CD3DX12_DESCRIPTOR_RANGE(D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 1, 0),
 	};
 	D3D12_DESCRIPTOR_RANGE constantsRange[] = {
-		CD3DX12_DESCRIPTOR_RANGE(D3D12_DESCRIPTOR_RANGE_TYPE_CBV, 2, 0),
+		CD3DX12_DESCRIPTOR_RANGE(D3D12_DESCRIPTOR_RANGE_TYPE_CBV, 3, 0),
 	};
-	CD3DX12_ROOT_PARAMETER rootParameters[3];
+
+	CD3DX12_ROOT_PARAMETER rootParameters[2];
 	rootParameters[0].InitAsDescriptorTable(_countof(descRange), descRange);
 	rootParameters[1].InitAsDescriptorTable(_countof(constantsRange), constantsRange);
-	rootParameters[2].InitAsConstants(16, 2);
 	D3D12_STATIC_SAMPLER_DESC staticSampler[] = { CD3DX12_STATIC_SAMPLER_DESC(0) };
 	D3D12_ROOT_SIGNATURE_DESC rsDesc = {
 		_countof(rootParameters),
@@ -800,8 +864,8 @@ bool CreatePSO() {
 	psoDesc.BlendState = CD3DX12_BLEND_DESC(D3D12_DEFAULT);
 	psoDesc.SampleMask = 0xffffffff;
 	psoDesc.RasterizerState = CD3DX12_RASTERIZER_DESC(D3D12_DEFAULT);
-	psoDesc.InputLayout.pInputElementDescs = vertexLayout;
-	psoDesc.InputLayout.NumElements = sizeof(vertexLayout) / sizeof(D3D12_INPUT_ELEMENT_DESC);
+	psoDesc.InputLayout.pInputElementDescs = pctLayout.Get();
+	psoDesc.InputLayout.NumElements = pctLayout.GetElementsNum();
 	psoDesc.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
 	psoDesc.NumRenderTargets = 1;
 	psoDesc.RTVFormats[0] = DXGI_FORMAT_R8G8B8A8_UNORM;
@@ -891,7 +955,12 @@ void DrawRectangle() {
 void DrawFbxModel() {
 	commandList->IASetVertexBuffers(0, 1, &fbxVertexBufferView);
 	commandList->IASetIndexBuffer(&fbxIndexBufferView);
-	commandList->DrawIndexedInstanced(fbxIndexCount, 1, 0, 0, 0);
+
+	for (int i = 0; i < baseIndex.size(); ++i) {
+		commandList->DrawIndexedInstanced(indexCount[i], 1, baseIndex[i], baseVertex[i], 0);
+	}
+
+	//commandList->DrawIndexedInstanced(fbxIndexCount, 1, 0, 0, 0);
 }
 
 bool LoadTexture() {
@@ -932,96 +1001,88 @@ bool CreateCircleTexture(TextureLoader& loader) {
 }
 
 bool LoadFbxFile(const char* filename) {
-	//FbxLoader::FbxLoader loader;
-	//if (!loader.Initialize(filename)) {
-	//	return false;
-	//}
-	//std::vector<FbxLoader::SkinnedMesh> meshes;
-	//loader.LoadSkinnedMesh(meshes);
-	//if (FAILED(device->CreateCommittedResource(
-	//	&CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_UPLOAD),
-	//	D3D12_HEAP_FLAG_NONE,
-	//	&CD3DX12_RESOURCE_DESC::Buffer(sizeof(Vertex) * 1024 * 10),
-	//	D3D12_RESOURCE_STATE_GENERIC_READ,
-	//	nullptr,
-	//	IID_PPV_ARGS(&fbxVertexBuffer)
-	//))) {
-	//	return false;
-	//}
+	FbxLoader::Loader loader;
+	if (!loader.Initialize(MODEL_FILE)) {
+		return false;
+	}
+	//loader.SetAxisType(FbxLoader::AxisType::LeftHand);
+	std::vector<FbxLoader::StaticMesh> meshes;
+	loader.LoadStaticMesh(meshes);
 
-	//fbxVertexBuffer->SetName(L"Fbx Vertex Buffer");
+	std::vector<Vertex> vertices;
+	std::vector<uint32_t> indices;
+	int indexStart = 0;
+	for (size_t i = 0; i < meshes.size(); ++i) {
+		for (size_t m = 0; m < meshes[i].materials.size(); ++m) {
+			baseVertex.push_back(vertices.size());
+			baseIndex.push_back(indices.size());
+			auto& material = meshes[i].materials[m];
 
-	//void* pVertexDataBegin;
-	//const D3D12_RANGE readRange = { 0,0 };
-	//if (FAILED(fbxVertexBuffer->Map(0, &readRange, &pVertexDataBegin))) {
-	//	return false;
-	//}
-	//std::vector<Vertex> verteces;
-	//for (auto& mesh : meshes) {
-	//	for (auto& material : mesh.materials) {
-	//		for (size_t i = 0; i < material.verteces.size(); ++i) {
-	//			auto& vert = material.verteces[i];
-	//			verteces.push_back(
-	//				{
-	//					XMFLOAT3(vert.position.x, vert.position.y, vert.position.z),
-	//					XMFLOAT4(vert.color.r,vert.color.g, vert.color.b, vert.color.a),
-	//					XMFLOAT2(0,0)
-	//				}
-	//			);
-	//		}
-	//	}
-	//}
+			for (size_t vindex = 0; vindex < material.verteces.size(); ++vindex) {
+				auto position = material.verteces[vindex].position;
+				vertices.push_back({ {position.x,position.y, position.z},{1.0f,1.0f,1.0f,1.0f},{0.0f,0.0f} });
+			}
+			for (size_t j = 0; j < material.indeces.size(); ++j) {
+				indices.push_back(material.indeces[j]);
+			}
+			indexCount.push_back(indices.size() - indexStart);
+			indexStart = indices.size();
+		}
+	}
 
-	//size_t bufferSize = sizeof(Vertex) * verteces.size();
-	//memcpy(pVertexDataBegin, verteces.data(), bufferSize);
-	//fbxVertexBuffer->Unmap(0, nullptr);
+	if (FAILED(device->CreateCommittedResource(
+		&CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_UPLOAD),
+		D3D12_HEAP_FLAG_NONE,
+		&CD3DX12_RESOURCE_DESC::Buffer(sizeof(Vertex) * 1024 * 1000),
+		D3D12_RESOURCE_STATE_GENERIC_READ,
+		nullptr,
+		IID_PPV_ARGS(&fbxVertexBuffer)
+	))) {
+		return false;
+	}
 
-	//fbxVertexBufferView.BufferLocation = fbxVertexBuffer->GetGPUVirtualAddress();
-	//fbxVertexBufferView.StrideInBytes = sizeof(Vertex);
-	//fbxVertexBufferView.SizeInBytes = bufferSize;
+	fbxVertexBuffer->SetName(L"Fbx Vertex Buffer");
 
+	void* pVertexDataBegin;
+	const D3D12_RANGE readRange = { 0,0 };
+	if (FAILED(fbxVertexBuffer->Map(0, &readRange, &pVertexDataBegin))) {
+		return false;
+	}
+	size_t bufferSize = sizeof(Vertex) * vertices.size();
+	memcpy(pVertexDataBegin, vertices.data(), bufferSize);
+	fbxVertexBuffer->Unmap(0, nullptr);
 
-	//if (FAILED(device->CreateCommittedResource(
-	//	&CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_UPLOAD),
-	//	D3D12_HEAP_FLAG_NONE,
-	//	&CD3DX12_RESOURCE_DESC::Buffer(sizeof(uint32_t) * 1024 * 10 * 3),
-	//	D3D12_RESOURCE_STATE_GENERIC_READ,
-	//	nullptr,
-	//	IID_PPV_ARGS(&fbxIndexBuffer)
-	//))) {
-	//	return false;
-	//}
-	//fbxIndexBuffer->SetName(L"Fbx Index buffer");
+	fbxVertexBufferView.BufferLocation = fbxVertexBuffer->GetGPUVirtualAddress();
+	fbxVertexBufferView.StrideInBytes = sizeof(Vertex);
+	fbxVertexBufferView.SizeInBytes = bufferSize;
 
-	//void* pIndexDataBegin;
-	//{
-	//	const D3D12_RANGE readRange = { 0,0 };
-	//	if (FAILED(fbxIndexBuffer->Map(0, &readRange, &pIndexDataBegin))) {
-	//		return false;
-	//	}
-	//}
-	//std::vector<uint32_t> indices;
-	//for (auto& mesh : meshes) {
-	//	for (auto& mate : mesh.materials) {
-	//		for (size_t i = 0; i < mate.indeces.size(); ++i) {
-	//			indices.push_back(mate.indeces[i]);
-	//		}
-	//	}
-	//}
-	//fbxIndexCount = indices.size();
+	if (FAILED(device->CreateCommittedResource(
+		&CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_UPLOAD),
+		D3D12_HEAP_FLAG_NONE,
+		&CD3DX12_RESOURCE_DESC::Buffer(sizeof(uint32_t) * 1024 * 1000 * 3),
+		D3D12_RESOURCE_STATE_GENERIC_READ,
+		nullptr,
+		IID_PPV_ARGS(&fbxIndexBuffer)
+	))) {
+		return false;
+	}
+	fbxIndexBuffer->SetName(L"Fbx Index buffer");
 
-	////std::vector<uint32_t> tmp;
-	////tmp.resize(fbxIndexCount);
-	////for (uint32_t i = 0; i < fbxIndexCount; ++i) {
-	////	tmp[i] = indices[fbxIndexCount - i - 1];
-	////}
-	////indices = tmp;
-	//memcpy(pIndexDataBegin, indices.data(), sizeof(uint32_t) * indices.size());
-	//fbxIndexBuffer->Unmap(0, nullptr);
+	void* pIndexDataBegin;
+	{
+		const D3D12_RANGE readRange = { 0,0 };
+		if (FAILED(fbxIndexBuffer->Map(0, &readRange, &pIndexDataBegin))) {
+			return false;
+		}
+	}
+	fbxIndexCount = indices.size();
 
-	//fbxIndexBufferView.BufferLocation = fbxIndexBuffer->GetGPUVirtualAddress();
-	//fbxIndexBufferView.Format = DXGI_FORMAT_R32_UINT;
-	//fbxIndexBufferView.SizeInBytes = sizeof(uint32_t) * indices.size();
+	memcpy(pIndexDataBegin, indices.data(), sizeof(uint32_t) * indices.size());
+	fbxIndexBuffer->Unmap(0, nullptr);
+
+	fbxIndexBufferView.BufferLocation = fbxIndexBuffer->GetGPUVirtualAddress();
+	fbxIndexBufferView.Format = DXGI_FORMAT_R32_UINT;
+	fbxIndexBufferView.SizeInBytes = sizeof(uint32_t) * indices.size();
 
 	return true;
 }
