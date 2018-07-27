@@ -129,7 +129,7 @@ struct InputLayoutConfig {
 			{ DXGI_FORMAT_R32_FLOAT, DXGI_FORMAT_R32G32_FLOAT, DXGI_FORMAT_R32G32B32_FLOAT, DXGI_FORMAT_R32G32B32A32_FLOAT },
 			{ DXGI_FORMAT_R32_SINT, DXGI_FORMAT_R32G32_SINT, DXGI_FORMAT_R32G32B32_SINT, DXGI_FORMAT_R32G32B32A32_SINT },
 			{ DXGI_FORMAT_R32_UINT, DXGI_FORMAT_R32G32_UINT, DXGI_FORMAT_R32G32B32_UINT, DXGI_FORMAT_R32G32B32A32_UINT},
-	
+
 		};
 		format = formats[fType][count - 1];
 
@@ -147,7 +147,7 @@ struct InputLayoutConfig {
 		elements.push_back({ semanticName, 0U, format, 0U, offset, ic, 0U });
 		offset += elementSize;
 	}
-	D3D12_INPUT_ELEMENT_DESC* Get() {
+	const D3D12_INPUT_ELEMENT_DESC* Get() const {
 		return elements.data();
 	}
 
@@ -158,7 +158,6 @@ struct InputLayoutConfig {
 	std::vector<D3D12_INPUT_ELEMENT_DESC> elements;
 	UINT offset = 0;
 };
-
 InputLayoutConfig pctLayout(3);
 //InputLayoutConfig animationLayout;
 
@@ -295,36 +294,289 @@ size_t csuDescriptorIndex[resourceDescriptorCount];
 ConstantBuffer constantBuffer;
 int constantIndex[3];
 
-//頂点データインプットレイアウト
-//const D3D12_INPUT_ELEMENT_DESC vertexLayout[] = {
-//	{
-//		"POSITION",
-//		0,
-//		DXGI_FORMAT_R32G32B32_FLOAT,
-//		0,
-//		0,
-//		D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA,
-//		0
-//	},
-//	{
-//		"COLOR",
-//		0,
-//		DXGI_FORMAT_R32G32B32A32_FLOAT,
-//		0,
-//		12,
-//		D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA,
-//		0
-//	},
-//	{
-//		"TEXCOORD",
-//		0,
-//		DXGI_FORMAT_R32G32_FLOAT,
-//		0,
-//		28,
-//		D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA,
-//		0
-//	}
-//};
+class RootSignature {
+public:
+	void AddParameterBlock(size_t blockCount, size_t bindIndex) {
+		descRanges.push_back(CD3DX12_DESCRIPTOR_RANGE(D3D12_DESCRIPTOR_RANGE_TYPE_CBV, blockCount, bindIndex));
+	}
+	void AddResourceBlock(size_t blockCount, size_t bindIndex) {
+		descRanges.push_back(CD3DX12_DESCRIPTOR_RANGE(D3D12_DESCRIPTOR_RANGE_TYPE_SRV, blockCount, bindIndex));
+	}
+	void AddStaticSampler(size_t bindIndex) {
+		staticSamplers.push_back(CD3DX12_STATIC_SAMPLER_DESC(bindIndex));
+	}
+	bool Finish(ComPtr<ID3D12Device> device) {
+		CD3DX12_ROOT_PARAMETER rootParameters[1];
+		rootParameters[0].InitAsDescriptorTable(descRanges.size(), descRanges.data());
+
+		D3D12_ROOT_SIGNATURE_DESC rsDesc = {
+			_countof(rootParameters),
+			rootParameters,
+			staticSamplers.size(),
+			staticSamplers.data(),
+			D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT
+		};
+
+		ComPtr<ID3DBlob> signatureBlob;
+		if (FAILED(D3D12SerializeRootSignature(
+			&rsDesc, D3D_ROOT_SIGNATURE_VERSION_1_0, &signatureBlob, nullptr))) {
+			return false;
+		}
+		if (FAILED(device->CreateRootSignature(
+			0,
+			signatureBlob->GetBufferPointer(),
+			signatureBlob->GetBufferSize(),
+			IID_PPV_ARGS(&rootSignature)))) {
+			return false;
+		}
+		return true;
+	}
+	ID3D12RootSignature* Get() const { return rootSignature.Get(); }
+private:
+	std::vector<D3D12_DESCRIPTOR_RANGE> descRanges;
+	std::vector<CD3DX12_STATIC_SAMPLER_DESC> staticSamplers;
+	ComPtr<ID3D12RootSignature> rootSignature;
+};
+
+class RootSignatureFactory {
+public:
+	RootSignatureFactory(){}
+	void AddParameterBlock(size_t blockCount, size_t bindIndex) {
+		descRanges.push_back(CD3DX12_DESCRIPTOR_RANGE(D3D12_DESCRIPTOR_RANGE_TYPE_CBV, blockCount, bindIndex));
+	}
+	void AddResourceBlock(size_t blockCount, size_t bindIndex) {
+		descRanges.push_back(CD3DX12_DESCRIPTOR_RANGE(D3D12_DESCRIPTOR_RANGE_TYPE_SRV, blockCount, bindIndex));
+	}
+	void AddStaticSampler(size_t bindIndex) {
+		staticSamplers.push_back(CD3DX12_STATIC_SAMPLER_DESC(bindIndex));
+	}
+	bool Create(ComPtr<ID3D12Device> device, ComPtr<ID3D12RootSignature>& rootSignature) {
+		CD3DX12_ROOT_PARAMETER rootParameters[1];
+		rootParameters[0].InitAsDescriptorTable(descRanges.size(), descRanges.data());
+
+		D3D12_ROOT_SIGNATURE_DESC rsDesc = {
+			_countof(rootParameters),
+			rootParameters,
+			staticSamplers.size(),
+			staticSamplers.data(),
+			D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT
+		};
+
+		ComPtr<ID3DBlob> signatureBlob;
+		if (FAILED(D3D12SerializeRootSignature(
+			&rsDesc, D3D_ROOT_SIGNATURE_VERSION_1_0, &signatureBlob, nullptr))) {
+			return false;
+		}
+		if (FAILED(device->CreateRootSignature(
+			0,
+			signatureBlob->GetBufferPointer(),
+			signatureBlob->GetBufferSize(),
+			IID_PPV_ARGS(&rootSignature)))) {
+			return false;
+		}
+		return true;
+	}
+private:
+	std::vector<D3D12_DESCRIPTOR_RANGE> descRanges;
+	std::vector<CD3DX12_STATIC_SAMPLER_DESC> staticSamplers;
+};
+
+class PipelineStateFactory {
+public:
+	PipelineStateFactory() { desc = {}; }
+	HRESULT Create(ComPtr<ID3D12Device> device, bool warp, ComPtr<ID3D12PipelineState>& p) {
+		desc.BlendState = CD3DX12_BLEND_DESC(D3D12_DEFAULT);
+		desc.SampleMask = 0xffffffff;
+		desc.RasterizerState = CD3DX12_RASTERIZER_DESC(D3D12_DEFAULT);
+		desc.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
+		desc.SampleDesc.Count = 1;
+		desc.DepthStencilState = CD3DX12_DEPTH_STENCIL_DESC(D3D12_DEFAULT);
+		desc.DSVFormat = DXGI_FORMAT_D32_FLOAT;
+		if (warp) {
+			desc.Flags = D3D12_PIPELINE_STATE_FLAG_TOOL_DEBUG;
+		}
+		return device->CreateGraphicsPipelineState(&desc, IID_PPV_ARGS(&p));
+	}
+
+	D3D12_GRAPHICS_PIPELINE_STATE_DESC Get(bool warp) {
+		desc.BlendState = CD3DX12_BLEND_DESC(D3D12_DEFAULT);
+		desc.SampleMask = 0xffffffff;
+		desc.RasterizerState = CD3DX12_RASTERIZER_DESC(D3D12_DEFAULT);
+		desc.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
+		desc.SampleDesc.Count = 1;
+		desc.DepthStencilState = CD3DX12_DEPTH_STENCIL_DESC(D3D12_DEFAULT);
+		desc.DSVFormat = DXGI_FORMAT_D32_FLOAT;
+		if (warp) {
+			desc.Flags = D3D12_PIPELINE_STATE_FLAG_TOOL_DEBUG;
+		}
+		return desc;
+	}
+	void SetRootSignature(ID3D12RootSignature* rootSignature) {
+		desc.pRootSignature = rootSignature;
+	}
+	void SetVertexShader(ID3DBlob* vs) {
+		desc.VS = {
+			vs->GetBufferPointer(),
+			vs->GetBufferSize()
+		};
+	}
+	void SetPixelShader(ID3DBlob* ps) {
+		desc.PS = {
+			ps->GetBufferPointer(),
+			ps->GetBufferSize()
+		};
+	}
+	void SetLayout(const InputLayoutConfig& layout) {
+		desc.InputLayout.pInputElementDescs = layout.Get();
+		desc.InputLayout.NumElements = layout.GetElementsNum();
+	}
+	void SetRenderTargets(size_t count, DXGI_FORMAT* formats) {
+		desc.NumRenderTargets = count;
+		for (size_t i = count; i < count; ++i) {
+			desc.RTVFormats[i] = formats[i];
+		}
+	}
+private:
+	D3D12_GRAPHICS_PIPELINE_STATE_DESC desc;
+};
+
+class PipelineState {
+public:
+	PipelineState() { psoDesc = {}; }
+	void SetVertexShader(ComPtr<ID3DBlob> vs) {
+		psoDesc.VS = {
+			vs->GetBufferPointer(),
+			vs->GetBufferSize()
+		};
+	}
+	void SetPixelShader(ComPtr<ID3DBlob> ps) {
+		psoDesc.PS = {
+			ps->GetBufferPointer(),
+			ps->GetBufferSize()
+		};
+	}
+	void SetRootSignature(ID3D12RootSignature* rootSignature) {
+		psoDesc.pRootSignature = rootSignature;
+	}
+	void SetLayout(const InputLayoutConfig& layout) {
+		psoDesc.InputLayout.pInputElementDescs = layout.Get();
+		psoDesc.InputLayout.NumElements = layout.GetElementsNum();
+	}
+
+	void SetRenderTargets(size_t count, DXGI_FORMAT* formats) {
+		psoDesc.NumRenderTargets = count;
+		for (size_t i = 0; i < count; ++i) {
+			psoDesc.RTVFormats[i] = formats[i];
+		}
+	}
+
+	bool Finish(ComPtr<ID3D12Device> device, bool warp) {
+		psoDesc.BlendState = CD3DX12_BLEND_DESC(D3D12_DEFAULT);
+		psoDesc.SampleMask = 0xffffffff;
+		psoDesc.RasterizerState = CD3DX12_RASTERIZER_DESC(D3D12_DEFAULT);
+		psoDesc.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
+		psoDesc.SampleDesc.Count = 1;
+		psoDesc.DepthStencilState = CD3DX12_DEPTH_STENCIL_DESC(D3D12_DEFAULT);
+		psoDesc.DSVFormat = DXGI_FORMAT_D32_FLOAT;
+		if (warp) {
+			psoDesc.Flags = D3D12_PIPELINE_STATE_FLAG_TOOL_DEBUG;
+		}
+		if (FAILED(device->CreateGraphicsPipelineState(&psoDesc, IID_PPV_ARGS(&pso)))) {
+			return false;
+		}
+		return true;
+	}
+private:
+	D3D12_GRAPHICS_PIPELINE_STATE_DESC psoDesc;
+	ComPtr<ID3D12PipelineState> pso;
+};
+
+class GraphicsPipeline {
+public:
+	bool SetVertexShader(const wchar_t* filename, const char* target) {
+		return LoadShader(filename, target, &vertexShaderBlob);
+	}
+	bool SetPixelShader(const wchar_t* filename, const char* target) {
+		return LoadShader(filename, target, &pixelShaderBlob);
+	}
+	void AddResourceBlock(size_t blockCount, size_t bindIndex) {
+		resourceRanges.push_back(CD3DX12_DESCRIPTOR_RANGE(D3D12_DESCRIPTOR_RANGE_TYPE_SRV, blockCount, bindIndex));
+	}
+	void AddParameterBlock(size_t blockCount, size_t bindIndex) {
+		resourceRanges.push_back(CD3DX12_DESCRIPTOR_RANGE(D3D12_DESCRIPTOR_RANGE_TYPE_CBV, blockCount, bindIndex));
+	}
+	void AddStaticSampler(size_t bindIndex) {
+		samplers.push_back(CD3DX12_STATIC_SAMPLER_DESC(bindIndex));
+	}
+
+	bool Finish(ComPtr<ID3D12Device> device, const InputLayoutConfig& layout, bool warp) {
+		CD3DX12_ROOT_PARAMETER rootParameter[1];
+		rootParameter[0].InitAsDescriptorTable(resourceRanges.size(), resourceRanges.data());
+		D3D12_ROOT_SIGNATURE_DESC rsDesc = {
+			_countof(rootParameter), rootParameter,
+			samplers.size(), samplers.data(),
+			D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT
+		};
+
+		ComPtr<ID3DBlob> signatureBlob;
+		if (FAILED(D3D12SerializeRootSignature(
+			&rsDesc, D3D_ROOT_SIGNATURE_VERSION_1_0, &signatureBlob, nullptr))) {
+			return false;
+		}
+		if (FAILED(device->CreateRootSignature(
+			0,
+			signatureBlob->GetBufferPointer(),
+			signatureBlob->GetBufferSize(),
+			IID_PPV_ARGS(&rootSignature)))) {
+			return false;
+		}
+
+		D3D12_GRAPHICS_PIPELINE_STATE_DESC psoDesc = {};
+		psoDesc.pRootSignature = rootSignature.Get();
+		psoDesc.VS = {
+			vertexShaderBlob->GetBufferPointer(),
+			vertexShaderBlob->GetBufferSize()
+		};
+		psoDesc.PS = {
+			pixelShaderBlob->GetBufferPointer(),
+			pixelShaderBlob->GetBufferSize()
+		};
+		psoDesc.BlendState = CD3DX12_BLEND_DESC(D3D12_DEFAULT);
+		psoDesc.SampleMask = 0xffffffff;
+		psoDesc.RasterizerState = CD3DX12_RASTERIZER_DESC(D3D12_DEFAULT);
+		psoDesc.InputLayout.pInputElementDescs = layout.Get();
+		psoDesc.InputLayout.NumElements = layout.GetElementsNum();
+		psoDesc.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
+		psoDesc.NumRenderTargets = 1;
+		psoDesc.RTVFormats[0] = DXGI_FORMAT_R8G8B8A8_UNORM;
+		psoDesc.SampleDesc.Count = 1;
+		psoDesc.DepthStencilState = CD3DX12_DEPTH_STENCIL_DESC(D3D12_DEFAULT);
+		psoDesc.DSVFormat = DXGI_FORMAT_D32_FLOAT;
+		if (warp) {
+			psoDesc.Flags = D3D12_PIPELINE_STATE_FLAG_TOOL_DEBUG;
+		}
+		if (FAILED(device->CreateGraphicsPipelineState(&psoDesc, IID_PPV_ARGS(&pso)))) {
+			return false;
+		}
+		return true;
+	}
+
+	void SetPipeLine(ComPtr<ID3D12GraphicsCommandList> commandList) {
+		commandList->SetPipelineState(pso.Get());
+		commandList->SetGraphicsRootSignature(rootSignature.Get());
+	}
+private:
+	std::vector<D3D12_DESCRIPTOR_RANGE> resourceRanges;
+	std::vector<D3D12_STATIC_SAMPLER_DESC> samplers;
+	ComPtr<ID3D12RootSignature> rootSignature;
+	ComPtr<ID3D12PipelineState> pso;
+	ComPtr<ID3DBlob> vertexShaderBlob;
+	ComPtr<ID3DBlob> pixelShaderBlob;
+};
+
+//GraphicsPipeline graphicsPipeline;
+ComPtr<ID3D12PipelineState> psobyfactory;
+ComPtr<ID3D12RootSignature> rootSignaturebyfactory;
 
 //頂点データ
 const Vertex vertices[] = {
@@ -519,53 +771,6 @@ bool InitializeD3D() {
 	constantIndex[1] = constantBuffer.AddData(&tmp, sizeof(tmp));
 	constantIndex[2] = constantBuffer.AddData(&tmp, sizeof(tmp));
 
-	//{
-	//	// ヒーププロパティの設定.
-	//	D3D12_HEAP_PROPERTIES prop = {};
-	//	prop.Type = D3D12_HEAP_TYPE_UPLOAD;
-	//	prop.CPUPageProperty = D3D12_CPU_PAGE_PROPERTY_UNKNOWN;
-	//	prop.MemoryPoolPreference = D3D12_MEMORY_POOL_UNKNOWN;
-	//	prop.CreationNodeMask = 1;
-	//	prop.VisibleNodeMask = 1;
-
-	//	// リソースの設定.
-	//	D3D12_RESOURCE_DESC desc = {};
-	//	desc.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
-	//	desc.Alignment = 0;
-	//	desc.Width = 0x100 * 100;
-	//	desc.Height = 1;
-	//	desc.DepthOrArraySize = 1;
-	//	desc.MipLevels = 1;
-	//	desc.Format = DXGI_FORMAT_UNKNOWN;
-	//	desc.SampleDesc.Count = 1;
-	//	desc.SampleDesc.Quality = 0;
-	//	desc.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
-	//	desc.Flags = D3D12_RESOURCE_FLAG_NONE;
-
-	//	// リソースを生成.
-	//	HRESULT hr = device->CreateCommittedResource(
-	//		&prop,
-	//		D3D12_HEAP_FLAG_NONE,
-	//		&desc,
-	//		D3D12_RESOURCE_STATE_GENERIC_READ,
-	//		nullptr,
-	//		IID_PPV_ARGS(&constantsResource));
-	//	if (FAILED(hr))
-	//	{
-	//		return false;
-	//	}
-	//}
-
-	//D3D12_CPU_DESCRIPTOR_HANDLE cbvHandle = constantsDescriptorHeap->GetCPUDescriptorHandleForHeapStart();
-	//UINT incrementSize = device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
-	//for (int i = 0; i < 1; ++i) {
-	//	D3D12_CONSTANT_BUFFER_VIEW_DESC desc = {};
-	//	desc.BufferLocation = constantsResource->GetGPUVirtualAddress();
-	//	desc.SizeInBytes = 0x100;
-	//	device->CreateConstantBufferView(&desc, constantsDescriptorHeap->GetCPUDescriptorHandleForHeapStart());
-	//	cbvHandle.ptr += incrementSize;
-	//}
-
 	for (int i = 0; i < resourceDescriptorCount; ++i) {
 		csuDescriptorIndex[i] = csuDescriptorList.AddConstantDescriptor(constantBuffer.GetGpuVirtualAddress(constantIndex[i]), 0x100);
 	}
@@ -706,10 +911,13 @@ bool Render() {
 	commandList->SetDescriptorHeaps(_countof(heapList), heapList);
 
 	//描画
-	commandList->SetPipelineState(pso.Get());
+	commandList->SetPipelineState(psobyfactory.Get());
 	commandList->SetGraphicsRootSignature(rootSignature.Get());
+	//graphicsPipeline.SetPipeLine(commandList);
+	//commandList->SetPipelineState(pso.Get());
+	//commandList->SetGraphicsRootSignature(rootSignature.Get());
 	//commandList->SetGraphicsRootDescriptorTable(0, texCircle.handle);
-	commandList->SetGraphicsRootDescriptorTable(1, csuDescriptorList.GetHandle(csuDescriptorIndex[0]));
+	commandList->SetGraphicsRootDescriptorTable(0, csuDescriptorList.GetHandle(csuDescriptorIndex[0]));
 	//commandList->SetGraphicsRoot32BitConstants(2, 16, &mat, 0);
 	commandList->RSSetViewports(1, &viewport);
 	commandList->RSSetScissorRects(1, &scissorRect);
@@ -790,25 +998,23 @@ bool LoadShader(const wchar_t* filename, const char* target, ID3DBlob** blob) {
 	return true;
 }
 
-struct RootSignature {
-
-};
-
-class GraphicsPipeLine {
-public:
-	bool SetVertexShader(const wchar_t* filename, const char* target);
-	bool SetPixelShader(const wchar_t* filename, const char* target);
-	bool AddResourceBlock(size_t blockCount, size_t bindIndex = 0);
-	bool AddParameterBlock(size_t blockCount, size_t bindIndex = 0);
-	bool AddSampler();
-private:
-	
-};
-
 bool CreatePSO() {
 	pctLayout.AddElement("POSITION", InputLayoutConfig::FormatType::Float, 3, InputLayoutConfig::Classification::Classification_PerVertex);
-	pctLayout.AddElement("COLOR",InputLayoutConfig::FormatType::Float, 4, InputLayoutConfig::Classification::Classification_PerVertex);
+	pctLayout.AddElement("COLOR", InputLayoutConfig::FormatType::Float, 4, InputLayoutConfig::Classification::Classification_PerVertex);
 	pctLayout.AddElement("TEXCOORD", InputLayoutConfig::FormatType::Float, 2, InputLayoutConfig::Classification::Classification_PerVertex);
+
+	//if (!graphicsPipeline.SetVertexShader(L"Res/VertexShader.hlsl", "vs_5_0")) {
+	//	return false;
+	//}
+	//if (!graphicsPipeline.SetPixelShader(L"Res/PixelShader.hlsl", "ps_5_0")) {
+	//	return false;
+	//}
+
+	//graphicsPipeline.AddParameterBlock(3, 0);
+
+	//if (!graphicsPipeline.Finish(device, pctLayout, warp)) {
+	//	return false;
+	//}
 
 	ComPtr<ID3DBlob> vertexShaderBlob;
 	if (!LoadShader(L"Res/VertexShader.hlsl", "vs_5_0", &vertexShaderBlob)) {
@@ -826,9 +1032,8 @@ bool CreatePSO() {
 		CD3DX12_DESCRIPTOR_RANGE(D3D12_DESCRIPTOR_RANGE_TYPE_CBV, 3, 0),
 	};
 
-	CD3DX12_ROOT_PARAMETER rootParameters[2];
-	rootParameters[0].InitAsDescriptorTable(_countof(descRange), descRange);
-	rootParameters[1].InitAsDescriptorTable(_countof(constantsRange), constantsRange);
+	CD3DX12_ROOT_PARAMETER rootParameters[1];
+	rootParameters[0].InitAsDescriptorTable(_countof(constantsRange), constantsRange);
 	D3D12_STATIC_SAMPLER_DESC staticSampler[] = { CD3DX12_STATIC_SAMPLER_DESC(0) };
 	D3D12_ROOT_SIGNATURE_DESC rsDesc = {
 		_countof(rootParameters),
@@ -876,6 +1081,25 @@ bool CreatePSO() {
 		psoDesc.Flags = D3D12_PIPELINE_STATE_FLAG_TOOL_DEBUG;
 	}
 	if (FAILED(device->CreateGraphicsPipelineState(&psoDesc, IID_PPV_ARGS(&pso)))) {
+		return false;
+	}
+
+	RootSignatureFactory rsFactory;
+	rsFactory.AddParameterBlock(3, 0);
+	if (!rsFactory.Create(device, rootSignaturebyfactory)) {
+		return false;
+	}
+
+	PipelineStateFactory factory;
+	factory.SetLayout(pctLayout);
+	factory.SetVertexShader(vertexShaderBlob.Get());
+	factory.SetPixelShader(pixelShaderBlob.Get());
+	DXGI_FORMAT formats[] = {
+		DXGI_FORMAT_R8G8B8A8_UNORM,
+	};
+	factory.SetRenderTargets(1, formats);
+	factory.SetRootSignature(rootSignaturebyfactory.Get());
+	if (FAILED(factory.Create(device, warp, psobyfactory))) {
 		return false;
 	}
 	return true;
@@ -955,12 +1179,9 @@ void DrawRectangle() {
 void DrawFbxModel() {
 	commandList->IASetVertexBuffers(0, 1, &fbxVertexBufferView);
 	commandList->IASetIndexBuffer(&fbxIndexBufferView);
-
 	for (int i = 0; i < baseIndex.size(); ++i) {
 		commandList->DrawIndexedInstanced(indexCount[i], 1, baseIndex[i], baseVertex[i], 0);
 	}
-
-	//commandList->DrawIndexedInstanced(fbxIndexCount, 1, 0, 0, 0);
 }
 
 bool LoadTexture() {
