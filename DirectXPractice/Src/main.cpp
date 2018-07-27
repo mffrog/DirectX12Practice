@@ -294,50 +294,6 @@ size_t csuDescriptorIndex[resourceDescriptorCount];
 ConstantBuffer constantBuffer;
 int constantIndex[3];
 
-class RootSignature {
-public:
-	void AddParameterBlock(size_t blockCount, size_t bindIndex) {
-		descRanges.push_back(CD3DX12_DESCRIPTOR_RANGE(D3D12_DESCRIPTOR_RANGE_TYPE_CBV, blockCount, bindIndex));
-	}
-	void AddResourceBlock(size_t blockCount, size_t bindIndex) {
-		descRanges.push_back(CD3DX12_DESCRIPTOR_RANGE(D3D12_DESCRIPTOR_RANGE_TYPE_SRV, blockCount, bindIndex));
-	}
-	void AddStaticSampler(size_t bindIndex) {
-		staticSamplers.push_back(CD3DX12_STATIC_SAMPLER_DESC(bindIndex));
-	}
-	bool Finish(ComPtr<ID3D12Device> device) {
-		CD3DX12_ROOT_PARAMETER rootParameters[1];
-		rootParameters[0].InitAsDescriptorTable(descRanges.size(), descRanges.data());
-
-		D3D12_ROOT_SIGNATURE_DESC rsDesc = {
-			_countof(rootParameters),
-			rootParameters,
-			staticSamplers.size(),
-			staticSamplers.data(),
-			D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT
-		};
-
-		ComPtr<ID3DBlob> signatureBlob;
-		if (FAILED(D3D12SerializeRootSignature(
-			&rsDesc, D3D_ROOT_SIGNATURE_VERSION_1_0, &signatureBlob, nullptr))) {
-			return false;
-		}
-		if (FAILED(device->CreateRootSignature(
-			0,
-			signatureBlob->GetBufferPointer(),
-			signatureBlob->GetBufferSize(),
-			IID_PPV_ARGS(&rootSignature)))) {
-			return false;
-		}
-		return true;
-	}
-	ID3D12RootSignature* Get() const { return rootSignature.Get(); }
-private:
-	std::vector<D3D12_DESCRIPTOR_RANGE> descRanges;
-	std::vector<CD3DX12_STATIC_SAMPLER_DESC> staticSamplers;
-	ComPtr<ID3D12RootSignature> rootSignature;
-};
-
 class RootSignatureFactory {
 public:
 	RootSignatureFactory(){}
@@ -384,7 +340,7 @@ private:
 class PipelineStateFactory {
 public:
 	PipelineStateFactory() { desc = {}; }
-	HRESULT Create(ComPtr<ID3D12Device> device, bool warp, ComPtr<ID3D12PipelineState>& p) {
+	bool Create(ComPtr<ID3D12Device> device, bool warp, ComPtr<ID3D12PipelineState>& p) {
 		desc.BlendState = CD3DX12_BLEND_DESC(D3D12_DEFAULT);
 		desc.SampleMask = 0xffffffff;
 		desc.RasterizerState = CD3DX12_RASTERIZER_DESC(D3D12_DEFAULT);
@@ -395,7 +351,10 @@ public:
 		if (warp) {
 			desc.Flags = D3D12_PIPELINE_STATE_FLAG_TOOL_DEBUG;
 		}
-		return device->CreateGraphicsPipelineState(&desc, IID_PPV_ARGS(&p));
+		if (FAILED(device->CreateGraphicsPipelineState(&desc, IID_PPV_ARGS(&p)))) {
+			return false;
+		}
+		return true;
 	}
 
 	D3D12_GRAPHICS_PIPELINE_STATE_DESC Get(bool warp) {
@@ -432,7 +391,7 @@ public:
 	}
 	void SetRenderTargets(size_t count, DXGI_FORMAT* formats) {
 		desc.NumRenderTargets = count;
-		for (size_t i = count; i < count; ++i) {
+		for (size_t i = 0; i < count; ++i) {
 			desc.RTVFormats[i] = formats[i];
 		}
 	}
@@ -440,143 +399,17 @@ private:
 	D3D12_GRAPHICS_PIPELINE_STATE_DESC desc;
 };
 
-class PipelineState {
-public:
-	PipelineState() { psoDesc = {}; }
-	void SetVertexShader(ComPtr<ID3DBlob> vs) {
-		psoDesc.VS = {
-			vs->GetBufferPointer(),
-			vs->GetBufferSize()
-		};
-	}
-	void SetPixelShader(ComPtr<ID3DBlob> ps) {
-		psoDesc.PS = {
-			ps->GetBufferPointer(),
-			ps->GetBufferSize()
-		};
-	}
-	void SetRootSignature(ID3D12RootSignature* rootSignature) {
-		psoDesc.pRootSignature = rootSignature;
-	}
-	void SetLayout(const InputLayoutConfig& layout) {
-		psoDesc.InputLayout.pInputElementDescs = layout.Get();
-		psoDesc.InputLayout.NumElements = layout.GetElementsNum();
-	}
-
-	void SetRenderTargets(size_t count, DXGI_FORMAT* formats) {
-		psoDesc.NumRenderTargets = count;
-		for (size_t i = 0; i < count; ++i) {
-			psoDesc.RTVFormats[i] = formats[i];
-		}
-	}
-
-	bool Finish(ComPtr<ID3D12Device> device, bool warp) {
-		psoDesc.BlendState = CD3DX12_BLEND_DESC(D3D12_DEFAULT);
-		psoDesc.SampleMask = 0xffffffff;
-		psoDesc.RasterizerState = CD3DX12_RASTERIZER_DESC(D3D12_DEFAULT);
-		psoDesc.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
-		psoDesc.SampleDesc.Count = 1;
-		psoDesc.DepthStencilState = CD3DX12_DEPTH_STENCIL_DESC(D3D12_DEFAULT);
-		psoDesc.DSVFormat = DXGI_FORMAT_D32_FLOAT;
-		if (warp) {
-			psoDesc.Flags = D3D12_PIPELINE_STATE_FLAG_TOOL_DEBUG;
-		}
-		if (FAILED(device->CreateGraphicsPipelineState(&psoDesc, IID_PPV_ARGS(&pso)))) {
-			return false;
-		}
-		return true;
-	}
-private:
-	D3D12_GRAPHICS_PIPELINE_STATE_DESC psoDesc;
-	ComPtr<ID3D12PipelineState> pso;
-};
-
-class GraphicsPipeline {
-public:
-	bool SetVertexShader(const wchar_t* filename, const char* target) {
-		return LoadShader(filename, target, &vertexShaderBlob);
-	}
-	bool SetPixelShader(const wchar_t* filename, const char* target) {
-		return LoadShader(filename, target, &pixelShaderBlob);
-	}
-	void AddResourceBlock(size_t blockCount, size_t bindIndex) {
-		resourceRanges.push_back(CD3DX12_DESCRIPTOR_RANGE(D3D12_DESCRIPTOR_RANGE_TYPE_SRV, blockCount, bindIndex));
-	}
-	void AddParameterBlock(size_t blockCount, size_t bindIndex) {
-		resourceRanges.push_back(CD3DX12_DESCRIPTOR_RANGE(D3D12_DESCRIPTOR_RANGE_TYPE_CBV, blockCount, bindIndex));
-	}
-	void AddStaticSampler(size_t bindIndex) {
-		samplers.push_back(CD3DX12_STATIC_SAMPLER_DESC(bindIndex));
-	}
-
-	bool Finish(ComPtr<ID3D12Device> device, const InputLayoutConfig& layout, bool warp) {
-		CD3DX12_ROOT_PARAMETER rootParameter[1];
-		rootParameter[0].InitAsDescriptorTable(resourceRanges.size(), resourceRanges.data());
-		D3D12_ROOT_SIGNATURE_DESC rsDesc = {
-			_countof(rootParameter), rootParameter,
-			samplers.size(), samplers.data(),
-			D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT
-		};
-
-		ComPtr<ID3DBlob> signatureBlob;
-		if (FAILED(D3D12SerializeRootSignature(
-			&rsDesc, D3D_ROOT_SIGNATURE_VERSION_1_0, &signatureBlob, nullptr))) {
-			return false;
-		}
-		if (FAILED(device->CreateRootSignature(
-			0,
-			signatureBlob->GetBufferPointer(),
-			signatureBlob->GetBufferSize(),
-			IID_PPV_ARGS(&rootSignature)))) {
-			return false;
-		}
-
-		D3D12_GRAPHICS_PIPELINE_STATE_DESC psoDesc = {};
-		psoDesc.pRootSignature = rootSignature.Get();
-		psoDesc.VS = {
-			vertexShaderBlob->GetBufferPointer(),
-			vertexShaderBlob->GetBufferSize()
-		};
-		psoDesc.PS = {
-			pixelShaderBlob->GetBufferPointer(),
-			pixelShaderBlob->GetBufferSize()
-		};
-		psoDesc.BlendState = CD3DX12_BLEND_DESC(D3D12_DEFAULT);
-		psoDesc.SampleMask = 0xffffffff;
-		psoDesc.RasterizerState = CD3DX12_RASTERIZER_DESC(D3D12_DEFAULT);
-		psoDesc.InputLayout.pInputElementDescs = layout.Get();
-		psoDesc.InputLayout.NumElements = layout.GetElementsNum();
-		psoDesc.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
-		psoDesc.NumRenderTargets = 1;
-		psoDesc.RTVFormats[0] = DXGI_FORMAT_R8G8B8A8_UNORM;
-		psoDesc.SampleDesc.Count = 1;
-		psoDesc.DepthStencilState = CD3DX12_DEPTH_STENCIL_DESC(D3D12_DEFAULT);
-		psoDesc.DSVFormat = DXGI_FORMAT_D32_FLOAT;
-		if (warp) {
-			psoDesc.Flags = D3D12_PIPELINE_STATE_FLAG_TOOL_DEBUG;
-		}
-		if (FAILED(device->CreateGraphicsPipelineState(&psoDesc, IID_PPV_ARGS(&pso)))) {
-			return false;
-		}
-		return true;
-	}
-
-	void SetPipeLine(ComPtr<ID3D12GraphicsCommandList> commandList) {
-		commandList->SetPipelineState(pso.Get());
+struct GraphicsPipeline {
+	void Use(ComPtr<ID3D12GraphicsCommandList> commandList) {
 		commandList->SetGraphicsRootSignature(rootSignature.Get());
+		commandList->SetPipelineState(pso.Get());
 	}
-private:
-	std::vector<D3D12_DESCRIPTOR_RANGE> resourceRanges;
-	std::vector<D3D12_STATIC_SAMPLER_DESC> samplers;
-	ComPtr<ID3D12RootSignature> rootSignature;
+
 	ComPtr<ID3D12PipelineState> pso;
-	ComPtr<ID3DBlob> vertexShaderBlob;
-	ComPtr<ID3DBlob> pixelShaderBlob;
+	ComPtr<ID3D12RootSignature> rootSignature;
 };
 
-//GraphicsPipeline graphicsPipeline;
-ComPtr<ID3D12PipelineState> psobyfactory;
-ComPtr<ID3D12RootSignature> rootSignaturebyfactory;
+GraphicsPipeline gpl;
 
 //頂点データ
 const Vertex vertices[] = {
@@ -911,9 +744,8 @@ bool Render() {
 	commandList->SetDescriptorHeaps(_countof(heapList), heapList);
 
 	//描画
-	commandList->SetPipelineState(psobyfactory.Get());
-	commandList->SetGraphicsRootSignature(rootSignature.Get());
-	//graphicsPipeline.SetPipeLine(commandList);
+	gpl.Use(commandList);
+	//commandList->SetGraphicsRootSignature(rootSignature.Get());
 	//commandList->SetPipelineState(pso.Get());
 	//commandList->SetGraphicsRootSignature(rootSignature.Get());
 	//commandList->SetGraphicsRootDescriptorTable(0, texCircle.handle);
@@ -998,24 +830,13 @@ bool LoadShader(const wchar_t* filename, const char* target, ID3DBlob** blob) {
 	return true;
 }
 
-bool CreatePSO() {
-	pctLayout.AddElement("POSITION", InputLayoutConfig::FormatType::Float, 3, InputLayoutConfig::Classification::Classification_PerVertex);
-	pctLayout.AddElement("COLOR", InputLayoutConfig::FormatType::Float, 4, InputLayoutConfig::Classification::Classification_PerVertex);
-	pctLayout.AddElement("TEXCOORD", InputLayoutConfig::FormatType::Float, 2, InputLayoutConfig::Classification::Classification_PerVertex);
-
-	//if (!graphicsPipeline.SetVertexShader(L"Res/VertexShader.hlsl", "vs_5_0")) {
-	//	return false;
-	//}
-	//if (!graphicsPipeline.SetPixelShader(L"Res/PixelShader.hlsl", "ps_5_0")) {
-	//	return false;
-	//}
-
-	//graphicsPipeline.AddParameterBlock(3, 0);
-
-	//if (!graphicsPipeline.Finish(device, pctLayout, warp)) {
-	//	return false;
-	//}
-
+bool CreatePipelineSteteObject(
+	const InputLayoutConfig& layout, 
+	const wchar_t* vsFile,
+	const wchar_t* psFile,
+	GraphicsPipeline& gpl
+	) {
+	//シェーダコンパイル
 	ComPtr<ID3DBlob> vertexShaderBlob;
 	if (!LoadShader(L"Res/VertexShader.hlsl", "vs_5_0", &vertexShaderBlob)) {
 		return false;
@@ -1025,71 +846,57 @@ bool CreatePSO() {
 		return false;
 	}
 
-	D3D12_DESCRIPTOR_RANGE descRange[] = {
-		CD3DX12_DESCRIPTOR_RANGE(D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 1, 0),
-	};
-	D3D12_DESCRIPTOR_RANGE constantsRange[] = {
-		CD3DX12_DESCRIPTOR_RANGE(D3D12_DESCRIPTOR_RANGE_TYPE_CBV, 3, 0),
-	};
-
-	CD3DX12_ROOT_PARAMETER rootParameters[1];
-	rootParameters[0].InitAsDescriptorTable(_countof(constantsRange), constantsRange);
-	D3D12_STATIC_SAMPLER_DESC staticSampler[] = { CD3DX12_STATIC_SAMPLER_DESC(0) };
-	D3D12_ROOT_SIGNATURE_DESC rsDesc = {
-		_countof(rootParameters),
-		rootParameters,
-		_countof(staticSampler),
-		staticSampler,
-		D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT
-	};
-
-	ComPtr<ID3DBlob> signatureBlob;
-	if (FAILED(D3D12SerializeRootSignature(
-		&rsDesc, D3D_ROOT_SIGNATURE_VERSION_1_0, &signatureBlob, nullptr))) {
-		return false;
-	}
-	if (FAILED(device->CreateRootSignature(
-		0,
-		signatureBlob->GetBufferPointer(),
-		signatureBlob->GetBufferSize(),
-		IID_PPV_ARGS(&rootSignature)))) {
-		return false;
-	}
-
-	D3D12_GRAPHICS_PIPELINE_STATE_DESC psoDesc = {};
-	psoDesc.pRootSignature = rootSignature.Get();
-	psoDesc.VS = {
-		vertexShaderBlob->GetBufferPointer(),
-		vertexShaderBlob->GetBufferSize()
-	};
-	psoDesc.PS = {
-		pixelShaderBlob->GetBufferPointer(),
-		pixelShaderBlob->GetBufferSize()
-	};
-	psoDesc.BlendState = CD3DX12_BLEND_DESC(D3D12_DEFAULT);
-	psoDesc.SampleMask = 0xffffffff;
-	psoDesc.RasterizerState = CD3DX12_RASTERIZER_DESC(D3D12_DEFAULT);
-	psoDesc.InputLayout.pInputElementDescs = pctLayout.Get();
-	psoDesc.InputLayout.NumElements = pctLayout.GetElementsNum();
-	psoDesc.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
-	psoDesc.NumRenderTargets = 1;
-	psoDesc.RTVFormats[0] = DXGI_FORMAT_R8G8B8A8_UNORM;
-	psoDesc.SampleDesc.Count = 1;
-	psoDesc.DepthStencilState = CD3DX12_DEPTH_STENCIL_DESC(D3D12_DEFAULT);
-	psoDesc.DSVFormat = DXGI_FORMAT_D32_FLOAT;
-	if (warp) {
-		psoDesc.Flags = D3D12_PIPELINE_STATE_FLAG_TOOL_DEBUG;
-	}
-	if (FAILED(device->CreateGraphicsPipelineState(&psoDesc, IID_PPV_ARGS(&pso)))) {
-		return false;
-	}
-
+	//RootSignatureの生成
+	//→シェーダとリソースのリンクのさせ方を定義する
 	RootSignatureFactory rsFactory;
 	rsFactory.AddParameterBlock(3, 0);
-	if (!rsFactory.Create(device, rootSignaturebyfactory)) {
+	if (!rsFactory.Create(device, gpl.rootSignature)) {
 		return false;
 	}
 
+	//PipelineStateObjectの生成
+	//→シェーダの描画パイプラインに関する設定を保持するオブジェクト
+	PipelineStateFactory factory;
+	factory.SetLayout(layout);
+	factory.SetVertexShader(vertexShaderBlob.Get());
+	factory.SetPixelShader(pixelShaderBlob.Get());
+	DXGI_FORMAT formats[] = {
+		DXGI_FORMAT_R8G8B8A8_UNORM,
+	};
+	factory.SetRenderTargets(1, formats);
+	factory.SetRootSignature(gpl.rootSignature.Get());
+	if (factory.Create(device, warp, gpl.pso)) {
+		return false;
+	}
+	return true;
+}
+
+bool CreatePSO() {
+	//頂点パラメータのレイアウト設定
+	pctLayout.AddElement("POSITION", InputLayoutConfig::FormatType::Float, 3, InputLayoutConfig::Classification::Classification_PerVertex);
+	pctLayout.AddElement("COLOR", InputLayoutConfig::FormatType::Float, 4, InputLayoutConfig::Classification::Classification_PerVertex);
+	pctLayout.AddElement("TEXCOORD", InputLayoutConfig::FormatType::Float, 2, InputLayoutConfig::Classification::Classification_PerVertex);
+
+	//シェーダコンパイル
+	ComPtr<ID3DBlob> vertexShaderBlob;
+	if (!LoadShader(L"Res/VertexShader.hlsl", "vs_5_0", &vertexShaderBlob)) {
+		return false;
+	}
+	ComPtr<ID3DBlob> pixelShaderBlob;
+	if (!LoadShader(L"Res/PixelShader.hlsl", "ps_5_0", &pixelShaderBlob)) {
+		return false;
+	}
+
+	//RootSignatureの生成
+	//→シェーダとリソースのリンクのさせ方を定義する
+	RootSignatureFactory rsFactory;
+	rsFactory.AddParameterBlock(3, 0);
+	if (!rsFactory.Create(device, gpl.rootSignature)) {
+		return false;
+	}
+
+	//PipelineStateObjectの生成
+	//→シェーダの描画パイプラインに関する設定を保持するオブジェクト
 	PipelineStateFactory factory;
 	factory.SetLayout(pctLayout);
 	factory.SetVertexShader(vertexShaderBlob.Get());
@@ -1098,8 +905,8 @@ bool CreatePSO() {
 		DXGI_FORMAT_R8G8B8A8_UNORM,
 	};
 	factory.SetRenderTargets(1, formats);
-	factory.SetRootSignature(rootSignaturebyfactory.Get());
-	if (FAILED(factory.Create(device, warp, psobyfactory))) {
+	factory.SetRootSignature(gpl.rootSignature.Get());
+	if (!factory.Create(device, warp, gpl.pso)) {
 		return false;
 	}
 	return true;
