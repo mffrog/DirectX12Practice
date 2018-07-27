@@ -67,6 +67,10 @@ bool WaitForGpu();
 
 bool LoadShader(const wchar_t*, const char*, ID3DBlob**);
 bool CreatePSO();
+
+struct InputLayoutConfig;
+struct GraphicsPipeline;
+bool CreatePipelineSteteObject(const InputLayoutConfig& layout, const wchar_t* vsFile, const wchar_t* psFile, GraphicsPipeline& gpl);
 bool CreateVertexBuffer();
 bool CreateIndexBuffer();
 
@@ -84,6 +88,18 @@ struct Vertex {
 	XMFLOAT3 position;
 	XMFLOAT4 color;
 	XMFLOAT2 texcoord;
+};
+
+struct FbxVertex {
+	XMFLOAT3 position;
+	XMFLOAT4 color;
+	XMFLOAT2 texcoord;
+	XMFLOAT3 normal;
+};
+
+struct LightData {
+	XMFLOAT4 position;
+	XMFLOAT4 color;
 };
 
 mff::Vector3<float> eyePosition(0.0f, 0.0f, -50.0f);
@@ -219,6 +235,8 @@ public:
 	size_t AddConstantDescriptor(D3D12_GPU_VIRTUAL_ADDRESS gpuVirtualAddress, size_t bufferSize) {
 		D3D12_CONSTANT_BUFFER_VIEW_DESC desc = {};
 		desc.BufferLocation = gpuVirtualAddress;
+		bufferSize += 0xff;
+		bufferSize = bufferSize & (~0xff);
 		desc.SizeInBytes = bufferSize;
 		device->CreateConstantBufferView(&desc, CD3DX12_CPU_DESCRIPTOR_HANDLE(cpuHandle, index, perDescriptorSize));
 		size_t offset = index;
@@ -291,8 +309,12 @@ ResourceDescriptorList csuDescriptorList;
 const size_t resourceDescriptorCount = 3;
 size_t csuDescriptorIndex[resourceDescriptorCount];
 
+size_t lightParamDescriptorIndex;
+
 ConstantBuffer constantBuffer;
 int constantIndex[3];
+int lightConstantBufferIndex;
+
 
 class RootSignatureFactory {
 public:
@@ -307,12 +329,16 @@ public:
 		staticSamplers.push_back(CD3DX12_STATIC_SAMPLER_DESC(bindIndex));
 	}
 	bool Create(ComPtr<ID3D12Device> device, ComPtr<ID3D12RootSignature>& rootSignature) {
-		CD3DX12_ROOT_PARAMETER rootParameters[1];
-		rootParameters[0].InitAsDescriptorTable(descRanges.size(), descRanges.data());
-
+		size_t rangeSize = descRanges.size();
+		std::vector<CD3DX12_ROOT_PARAMETER> rootParameters(rangeSize);
+		for (size_t i = 0; i < rangeSize; ++i) {
+			rootParameters[i].InitAsDescriptorTable(1, &descRanges[i]);
+		}
+		//rootParameters[0].InitAsDescriptorTable(descRanges.size(), descRanges.data());
+		
 		D3D12_ROOT_SIGNATURE_DESC rsDesc = {
-			_countof(rootParameters),
-			rootParameters,
+			rootParameters.size(),
+			rootParameters.data(),
 			staticSamplers.size(),
 			staticSamplers.data(),
 			D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT
@@ -410,6 +436,8 @@ struct GraphicsPipeline {
 };
 
 GraphicsPipeline gpl;
+GraphicsPipeline fbxGraphicsPipeline;
+
 
 //頂点データ
 const Vertex vertices[] = {
@@ -603,11 +631,12 @@ bool InitializeD3D() {
 	constantIndex[0] = constantBuffer.AddData(&tmp, sizeof(tmp));
 	constantIndex[1] = constantBuffer.AddData(&tmp, sizeof(tmp));
 	constantIndex[2] = constantBuffer.AddData(&tmp, sizeof(tmp));
+	lightConstantBufferIndex = constantBuffer.AddData(&tmp, sizeof(LightData));
 
 	for (int i = 0; i < resourceDescriptorCount; ++i) {
-		csuDescriptorIndex[i] = csuDescriptorList.AddConstantDescriptor(constantBuffer.GetGpuVirtualAddress(constantIndex[i]), 0x100);
+		csuDescriptorIndex[i] = csuDescriptorList.AddConstantDescriptor(constantBuffer.GetGpuVirtualAddress(constantIndex[i]), sizeof(XMMATRIX));
 	}
-
+	lightParamDescriptorIndex = csuDescriptorList.AddConstantDescriptor(constantBuffer.GetGpuVirtualAddress(lightConstantBufferIndex), sizeof(LightData));
 	//コマンドアロケーターの生成
 	for (int i = 0; i < frameBufferCount; ++i) {
 		HRESULT hr = device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&commandAllocator[i]));
@@ -653,6 +682,16 @@ bool InitializeD3D() {
 		return false;
 	}
 
+	InputLayoutConfig layout;
+	layout.AddElement("POSITION",	InputLayoutConfig::Float, 3, InputLayoutConfig::Classification_PerVertex);
+	layout.AddElement("COLOR"	,	InputLayoutConfig::Float, 4, InputLayoutConfig::Classification_PerVertex);
+	layout.AddElement("TEXCOORD",	InputLayoutConfig::Float, 2, InputLayoutConfig::Classification_PerVertex);
+	layout.AddElement("NORMAL"	,	InputLayoutConfig::Float, 3, InputLayoutConfig::Classification_PerVertex);
+
+	if (!CreatePipelineSteteObject(layout, L"Res/FbxVertexShader.hlsl", L"Res/FbxPixelShader.hlsl", fbxGraphicsPipeline)) {
+		return false;
+	}
+
 	if (!CreateVertexBuffer()) {
 		return false;
 	}
@@ -695,7 +734,7 @@ bool Render() {
 	const XMVECTOR eyeUp = { 0.0f, 1.0f, 0.0f, 0.0f };
 	XMMATRIX matView = XMMatrixLookAtLH(eyePos, eyeCenter, eyeUp);
 	matViewprojection = matView;
-	XMMATRIX matProj = XMMatrixPerspectiveFovLH(3.1515926535 * 0.5f, (float)clientWidth / (float)clientHeight, 0.1f, 1000.0f);
+	XMMATRIX matProj = XMMatrixPerspectiveFovLH(3.1515926535f * 0.25f, (float)clientWidth / (float)clientHeight, 0.1f, 1000.0f);
 	matViewprojection *= matProj;
 	XMFLOAT4X4 mat;
 	XMStoreFloat4x4(&mat, (matViewprojection));
@@ -705,9 +744,14 @@ bool Render() {
 	XMStoreFloat4x4(&projection, XMMatrixTranspose(matProj));
 	XMFLOAT4X4 world;
 	mff::Vector3<float> position;
-	XMStoreFloat4x4(&world, XMMatrixTranspose(XMMatrixTranslation(position.x, position.y, position.z)));
+	XMStoreFloat4x4(&world, XMMatrixTranspose(XMMatrixRotationY(XMConvertToRadians(0.0f))));
+	
+	LightData lightData;
+	lightData.position = {-250.0f, 250.0f, 0.0f, 1.0f};
+	mff::Vector4<float> lightColor = mff::Vector4<float>(0.02f, 1.0f, 0.8f, 1.0f) * 250000.0f;
+	lightData.color = {lightColor.r, lightColor.g, lightColor.b, lightColor.a};
 	{
-		void* pConstantResrouce;
+		void* pConstantResrouce = nullptr;
 		D3D12_RANGE range = { 0,0 };
 		//constantsResource->Map(0, &range, &pConstantResrouce);
 		XMFLOAT4X4 matrixes[] = {
@@ -720,6 +764,7 @@ bool Render() {
 		constantBuffer.Update(constantIndex[0], &view, sizeof(view));
 		constantBuffer.Update(constantIndex[1], &projection, sizeof(projection));
 		constantBuffer.Update(constantIndex[2], &world, sizeof(world));
+		constantBuffer.Update(lightConstantBufferIndex, &lightData, sizeof(LightData));
 	}
 
 	commandList->ResourceBarrier(
@@ -761,6 +806,8 @@ bool Render() {
 	//commandList->IASetIndexBuffer(&indexBufferView);
 	//commandList->DrawIndexedInstanced(_countof(indices), 1, 0, triangleVertexCount, 0);
 
+	fbxGraphicsPipeline.Use(commandList);
+	commandList->SetGraphicsRootDescriptorTable(1, csuDescriptorList.GetHandle(lightParamDescriptorIndex));
 	DrawFbxModel();
 
 	commandList->ResourceBarrier(
@@ -838,34 +885,35 @@ bool CreatePipelineSteteObject(
 	) {
 	//シェーダコンパイル
 	ComPtr<ID3DBlob> vertexShaderBlob;
-	if (!LoadShader(L"Res/VertexShader.hlsl", "vs_5_0", &vertexShaderBlob)) {
+	if (!LoadShader(vsFile, "vs_5_0", &vertexShaderBlob)) {
 		return false;
 	}
 	ComPtr<ID3DBlob> pixelShaderBlob;
-	if (!LoadShader(L"Res/PixelShader.hlsl", "ps_5_0", &pixelShaderBlob)) {
+	if (!LoadShader(psFile, "ps_5_0", &pixelShaderBlob)) {
 		return false;
 	}
 
 	//RootSignatureの生成
 	//→シェーダとリソースのリンクのさせ方を定義する
-	RootSignatureFactory rsFactory;
-	rsFactory.AddParameterBlock(3, 0);
-	if (!rsFactory.Create(device, gpl.rootSignature)) {
+	RootSignatureFactory rootSignatureFactory;
+	rootSignatureFactory.AddParameterBlock(3, 0);
+	rootSignatureFactory.AddParameterBlock(1, 3);
+	if (!rootSignatureFactory.Create(device, gpl.rootSignature)) {
 		return false;
 	}
 
 	//PipelineStateObjectの生成
 	//→シェーダの描画パイプラインに関する設定を保持するオブジェクト
-	PipelineStateFactory factory;
-	factory.SetLayout(layout);
-	factory.SetVertexShader(vertexShaderBlob.Get());
-	factory.SetPixelShader(pixelShaderBlob.Get());
+	PipelineStateFactory psoFactory;
+	psoFactory.SetLayout(layout);
+	psoFactory.SetVertexShader(vertexShaderBlob.Get());
+	psoFactory.SetPixelShader(pixelShaderBlob.Get());
 	DXGI_FORMAT formats[] = {
 		DXGI_FORMAT_R8G8B8A8_UNORM,
 	};
-	factory.SetRenderTargets(1, formats);
-	factory.SetRootSignature(gpl.rootSignature.Get());
-	if (factory.Create(device, warp, gpl.pso)) {
+	psoFactory.SetRenderTargets(1, formats);
+	psoFactory.SetRootSignature(gpl.rootSignature.Get());
+	if (!psoFactory.Create(device, warp, gpl.pso)) {
 		return false;
 	}
 	return true;
@@ -986,7 +1034,7 @@ void DrawRectangle() {
 void DrawFbxModel() {
 	commandList->IASetVertexBuffers(0, 1, &fbxVertexBufferView);
 	commandList->IASetIndexBuffer(&fbxIndexBufferView);
-	for (int i = 0; i < baseIndex.size(); ++i) {
+	for (size_t i = 0; i < baseIndex.size(); ++i) {
 		commandList->DrawIndexedInstanced(indexCount[i], 1, baseIndex[i], baseVertex[i], 0);
 	}
 }
@@ -1037,7 +1085,7 @@ bool LoadFbxFile(const char* filename) {
 	std::vector<FbxLoader::StaticMesh> meshes;
 	loader.LoadStaticMesh(meshes);
 
-	std::vector<Vertex> vertices;
+	std::vector<FbxVertex> vertices;
 	std::vector<uint32_t> indices;
 	int indexStart = 0;
 	for (size_t i = 0; i < meshes.size(); ++i) {
@@ -1047,8 +1095,15 @@ bool LoadFbxFile(const char* filename) {
 			auto& material = meshes[i].materials[m];
 
 			for (size_t vindex = 0; vindex < material.verteces.size(); ++vindex) {
-				auto position = material.verteces[vindex].position;
-				vertices.push_back({ {position.x,position.y, position.z},{1.0f,1.0f,1.0f,1.0f},{0.0f,0.0f} });
+				auto& vert = material.verteces[vindex];
+				vertices.push_back(
+					{ 
+						{vert.position.x,vert.position.y, vert.position.z},
+						{vert.color.r, vert.color.g, vert.color.b, vert.color.a},
+						{vert.texCoord.s, vert.texCoord.t}, 
+						{vert.normal.x, vert.normal.y, vert.normal.z}
+					}
+				);
 			}
 			for (size_t j = 0; j < material.indeces.size(); ++j) {
 				indices.push_back(material.indeces[j]);
@@ -1061,7 +1116,7 @@ bool LoadFbxFile(const char* filename) {
 	if (FAILED(device->CreateCommittedResource(
 		&CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_UPLOAD),
 		D3D12_HEAP_FLAG_NONE,
-		&CD3DX12_RESOURCE_DESC::Buffer(sizeof(Vertex) * 1024 * 1000),
+		&CD3DX12_RESOURCE_DESC::Buffer(sizeof(FbxVertex) * 1024 * 1000),
 		D3D12_RESOURCE_STATE_GENERIC_READ,
 		nullptr,
 		IID_PPV_ARGS(&fbxVertexBuffer)
@@ -1076,12 +1131,12 @@ bool LoadFbxFile(const char* filename) {
 	if (FAILED(fbxVertexBuffer->Map(0, &readRange, &pVertexDataBegin))) {
 		return false;
 	}
-	size_t bufferSize = sizeof(Vertex) * vertices.size();
+	size_t bufferSize = sizeof(FbxVertex) * vertices.size();
 	memcpy(pVertexDataBegin, vertices.data(), bufferSize);
 	fbxVertexBuffer->Unmap(0, nullptr);
 
 	fbxVertexBufferView.BufferLocation = fbxVertexBuffer->GetGPUVirtualAddress();
-	fbxVertexBufferView.StrideInBytes = sizeof(Vertex);
+	fbxVertexBufferView.StrideInBytes = sizeof(FbxVertex);
 	fbxVertexBufferView.SizeInBytes = bufferSize;
 
 	if (FAILED(device->CreateCommittedResource(
@@ -1130,7 +1185,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
 			GetCursorPos(&pos);
 			mff::Vector2<float> delta = mff::Vector2<float>(pos.x, pos.y) - mousePos;
 			mousePos = mff::Vector2<float>(pos.x, pos.y);
-			float rate = 0.025;
+			float rate = 0.025f;
 			float theta = rate * delta.x;
 			eyeDirection.x = eyeDirection.x * cosf(theta) + eyeDirection.z * sinf(theta);
 			eyeDirection.z = eyeDirection.x * -sinf(theta) + eyeDirection.z * cosf(theta);
