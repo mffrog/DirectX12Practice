@@ -512,7 +512,7 @@ Resource::IndexBuffer resIndexBuffer;
 Resource::VertexBuffer<Vertex> cylindereVertex;
 Resource::IndexBuffer cylinderIndex;
 size_t cylinderIndexCount = 0;
-bool CreateCylinder(int separateCount, int level, float levelRate);
+bool CreateCylinder(int separateCount, int level, float levelRate, float radius);
 
 template<int N>
 struct FrameComponent {
@@ -549,7 +549,7 @@ public:
 		current = swapChain->GetCurrentBackBufferIndex();
 	}
 private:
-	
+
 	Component components[N];
 	int current = 0;
 	ComPtr<IDXGISwapChain3> swapChain;
@@ -571,6 +571,9 @@ int lightConstantBufferIndex;
 class RootSignatureFactory {
 public:
 	RootSignatureFactory() {}
+	void AddConstants(size_t count,size_t bindIndex) {
+		constants.push_back({count, bindIndex});
+	}
 	void AddParameterBlock(size_t blockCount, size_t bindIndex) {
 		descRanges.push_back(CD3DX12_DESCRIPTOR_RANGE(D3D12_DESCRIPTOR_RANGE_TYPE_CBV, blockCount, bindIndex));
 	}
@@ -582,11 +585,13 @@ public:
 	}
 	bool Create(ComPtr<ID3D12Device> device, ComPtr<ID3D12RootSignature>& rootSignature) {
 		size_t rangeSize = descRanges.size();
-		std::vector<CD3DX12_ROOT_PARAMETER> rootParameters(rangeSize);
+		std::vector<CD3DX12_ROOT_PARAMETER> rootParameters(rangeSize + constants.size());
 		for (size_t i = 0; i < rangeSize; ++i) {
 			rootParameters[i].InitAsDescriptorTable(1, &descRanges[i]);
 		}
-		//rootParameters[0].InitAsDescriptorTable(descRanges.size(), descRanges.data());
+		for (size_t i = 0; i < constants.size(); ++i) {
+			rootParameters[rangeSize + i].InitAsConstants(constants[i].first, constants[i].second);
+		}
 
 		D3D12_ROOT_SIGNATURE_DESC rsDesc = {
 			rootParameters.size(),
@@ -613,6 +618,7 @@ public:
 private:
 	std::vector<D3D12_DESCRIPTOR_RANGE> descRanges;
 	std::vector<CD3DX12_STATIC_SAMPLER_DESC> staticSamplers;
+	std::vector<std::pair<size_t, size_t>> constants;
 };
 
 class PipelineStateFactory {
@@ -789,7 +795,7 @@ public:
 	}
 	template<typename T>
 	void SetVertexBuffer(Resource::VertexBuffer<T>* vertex) {
-		commandList->IASetVertexBuffers(0,1, &vertex->GetView());
+		commandList->IASetVertexBuffers(0, 1, &vertex->GetView());
 	}
 	void SetIndexBuffer(Resource::IndexBuffer* index) {
 		commandList->IASetIndexBuffer(&index->GetView());
@@ -873,7 +879,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int nCmdShow) {
 		return 1;
 	}
 
-	ShowCursor(FALSE);
+	//ShowCursor(FALSE);
 	SetCursorPos(clientWidth / 2, clientHeight / 2);
 
 	if (!InitializeD3D()) {
@@ -1052,11 +1058,11 @@ bool InitializeD3D() {
 		csuDescriptorIndex[i] = csuDescriptorList.AddConstantDescriptor(constantBuffer.GetGpuVirtualAddress(constantIndex[i]), sizeof(XMMATRIX));
 	}
 	lightParamDescriptorIndex = csuDescriptorList.AddConstantDescriptor(constantBuffer.GetGpuVirtualAddress(lightConstantBufferIndex), sizeof(LightData));
-	
+
 	if (!resourceManager.Init(device, 100, 200)) {
 		return false;
 	}
-	
+
 	for (int i = 0; i < 3; ++i) {
 		constantResources[i] = resourceManager.AddResource(sizeof(XMMATRIX));
 		if (!constantResources[i]) {
@@ -1121,9 +1127,9 @@ bool InitializeD3D() {
 	scissorRect.bottom = clientHeight;
 
 	InputLayout cylinderLayout;
-	cylinderLayout.AddElement("POSITION",	InputLayout::Float, 3, InputLayout::Classification_PerVertex);
-	cylinderLayout.AddElement("COLOR",		InputLayout::Float, 4, InputLayout::Classification_PerVertex);
-	cylinderLayout.AddElement("TEXCOORD",	InputLayout::Float, 2, InputLayout::Classification_PerVertex);
+	cylinderLayout.AddElement("POSITION", InputLayout::Float, 3, InputLayout::Classification_PerVertex);
+	cylinderLayout.AddElement("COLOR", InputLayout::Float, 4, InputLayout::Classification_PerVertex);
+	cylinderLayout.AddElement("TEXCOORD", InputLayout::Float, 2, InputLayout::Classification_PerVertex);
 
 	if (!CreatePipelineSteteObject(cylinderLayout, L"Res/Twist.hlsl", L"Res/PixelShader.hlsl", gpl)) {
 		return false;
@@ -1155,7 +1161,7 @@ bool InitializeD3D() {
 		return false;
 	}
 
-	if (!CreateCylinder(16, 144, 0.5f)) {
+	if (!CreateCylinder(32, 144, 0.25, 2.25f)) {
 		return false;
 	}
 	return true;
@@ -1296,7 +1302,7 @@ bool Render() {
 	D3D12_CPU_DESCRIPTOR_HANDLE rtvHandle = rtvDescriptorHeap->GetCPUDescriptorHandleForHeapStart();
 	D3D12_CPU_DESCRIPTOR_HANDLE dsvHandle = dsvDescriptorHeap->GetCPUDescriptorHandleForHeapStart();
 	rtvHandle.ptr += rtvDescriptorSize * frameComponent.GetFrame();
-	float clearColor[] = {0.1f,0.3f,0.5f,1.0f};
+	float clearColor[] = { 0.1f,0.3f,0.5f,1.0f };
 	renderingProcess.SetRTVAndDSV(1, &rtvHandle, &dsvHandle);
 	renderingProcess.ClearRenderTarget(rtvHandle, clearColor);
 	renderingProcess.ClearDepthStencil(dsvHandle);
@@ -1305,6 +1311,10 @@ bool Render() {
 	renderingProcess.SetGraphicsPipeline(&gpl);
 	renderingProcess.SetResourceManager(&resourceManager);
 	renderingProcess.SetResource(0, &constantResources[0]);
+
+	static float dt = 1.0f;
+	dt += 2.0f;
+	renderingProcess.GetCommandList()->SetGraphicsRoot32BitConstants(2, 1, &dt, 0);
 	//renderingProcess.SetResource(1, &constantLightingResource);
 	//DrawFbxModel();
 
@@ -1409,6 +1419,7 @@ bool CreatePipelineSteteObject(
 	RootSignatureFactory rootSignatureFactory;
 	rootSignatureFactory.AddParameterBlock(3, 0);
 	rootSignatureFactory.AddParameterBlock(1, 3);
+	rootSignatureFactory.AddConstants(1, 4);
 	if (!rootSignatureFactory.Create(device, gpl.rootSignature)) {
 		return false;
 	}
@@ -1705,7 +1716,7 @@ bool LoadFbxFile(const char* filename) {
 	return true;
 }
 
-bool CreateCylinder(int separateCount, int level, float levelRate) {
+bool CreateCylinder(int separateCount, int level, float levelRate, float radius) {
 	if (separateCount < 3) {
 		return false;
 	}
@@ -1714,12 +1725,12 @@ bool CreateCylinder(int separateCount, int level, float levelRate) {
 	for (int lev = 0; lev < level + 1; ++lev) {
 		for (int sep = 0; sep < separateCount; ++sep) {
 			Vertex v;
-			float x = cosf(rad * sep * 2.0f * M_PI);
-			float z = sinf(rad * sep * 2.0f * M_PI);
+			float x = cosf(rad * sep * 2.0f * M_PI) * radius;
+			float z = sinf(rad * sep * 2.0f * M_PI) * radius;
 			float y = lev * levelRate;
 
-			v.position = {x,y,z};
-			v.color = {(x + 1.0f) * 0.5f,(float)lev / (float)level,(z + 1.0f) * 0.5f,1.0f};
+			v.position = { x,y,z };
+			v.color = { (x + 1.0f) * 0.5f,/*(float)lev / (float)level*/0.0f,(z + 1.0f) * 0.5f,1.0f };
 			v.texcoord = { (float)sep / (float)separateCount, (float)lev / (float)level };
 			vertices.push_back(v);
 		}
@@ -1755,7 +1766,7 @@ bool CreateCylinder(int separateCount, int level, float levelRate) {
 LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
 	switch (msg) {
 	case WM_MOUSEMOVE:
-		if (!mpInit) {
+	/*	if (!mpInit) {
 			POINT pos;
 			GetCursorPos(&pos);
 			mousePos.x = pos.x;
@@ -1778,7 +1789,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
 			cast = mff::Normalize(cast);
 			eyeDirection = cast * cosf(hTheta);
 			eyeDirection.y = sinf(hTheta);
-		}
+		}*/
 		return 0;
 	case WM_KEYDOWN:
 	{
