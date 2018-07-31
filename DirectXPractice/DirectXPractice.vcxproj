@@ -163,6 +163,7 @@
     </Link>
   </ItemDefinitionGroup>
   <ItemGroup>
+    <ClCompile Include="Src\Graphics\Graphics.cpp" />
     <ClCompile Include="Src\Lib\FbxLoader\FbxLoader.cpp" />
     <ClCompile Include="Src\main.cpp" />
     <ClCompile Include="Src\Math\MathFunctions.cpp" />
@@ -171,9 +172,11 @@
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="Src\d3dx12.h" />
+    <ClInclude Include="Src\Graphics\Graphics.h" />
     <ClInclude Include="Src\Lib\FbxLoader\FbxLoader.h" />
     <ClInclude Include="Src\Lib\FbxLoader\FbxLoaderStructs.h" />
     <ClInclude Include="Src\Math\MathFunctions.h" />
+    <ClInclude Include="Src\Math\Matrix\Matrix4x3.h" />
     <ClInclude Include="Src\Math\Matrix\Matrix4x4.h" />
     <ClInclude Include="Src\Math\Vector\Vector2.h" />
     <ClInclude Include="Src\Math\Vector\Vector3.h" />
@@ -200,6 +203,12 @@
       <ShaderType Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">Pixel</ShaderType>
       <ShaderType Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">Pixel</ShaderType>
       <ShaderType Condition="'$(Configuration)|$(Platform)'=='Release|x64'">Pixel</ShaderType>
+    </FxCompile>
+    <FxCompile Include="Res\Twist.hlsl">
+      <ShaderType Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">Vertex</ShaderType>
+      <ShaderType Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">Vertex</ShaderType>
+      <ShaderType Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">Vertex</ShaderType>
+      <ShaderType Condition="'$(Configuration)|$(Platform)'=='Release|x64'">Vertex</ShaderType>
     </FxCompile>
     <FxCompile Include="Res\VertexShader.hlsl">
       <ShaderType Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">Vertex</ShaderType>

@@ -1,4 +1,5 @@
 #pragma once
+#include <math.h>
 namespace mff {
 	struct CharType {
 		using type = char;

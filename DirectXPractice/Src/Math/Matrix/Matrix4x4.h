@@ -1,5 +1,15 @@
 #pragma once
 #include "../Vector/Vector4.h"
+//メモリレイアウト　→　v[i] がそれぞれ行
+//データレイアウト　↓
+/*
+	t = translation, r = rotation, s = scale
+
+	sr, sr, sr, t
+	sr, sr, sr, t
+	sr, sr, sr, t
+	 0,  0,  0, 1
+*/
 namespace mff {
 	template<typename T>
 	struct Matrix4x4 {
@@ -75,19 +85,34 @@ namespace mff {
 		return ret;
 	}
 
+	//template<typename T>
+	//Vector4<T> operator*(const Vector4<T>& vec, const Matrix4x4<T>& mat) {
+	//	return Vector4<T>(
+	//		dot(vec, Vector4<T>(mat[0][0], mat[1][0], mat[2][0], mat[3][0])),
+	//		dot(vec, Vector4<T>(mat[0][1], mat[1][1], mat[2][1], mat[3][1])),
+	//		dot(vec, Vector4<T>(mat[0][2], mat[1][2], mat[2][2], mat[3][2])),
+	//		dot(vec, Vector4<T>(mat[0][3], mat[1][3], mat[2][3], mat[3][3]))
+	//		);
+	//}
+
 	template<typename T>
-	Vector4<T> operator*(const Vector4<T>& vec, const Matrix4x4<T>& mat) {
+	Vector4<T> operator*(const Matrix4x4<T>& mat, const Vector4<T>& vec) {
 		return Vector4<T>(
-			dot(vec, Vector4<T>(mat[0][0], mat[1][0], mat[2][0], mat[3][0])),
-			dot(vec, Vector4<T>(mat[0][1], mat[1][1], mat[2][1], mat[3][1])),
-			dot(vec, Vector4<T>(mat[0][2], mat[1][2], mat[2][2], mat[3][2])),
-			dot(vec, Vector4<T>(mat[0][3], mat[1][3], mat[2][3], mat[3][3]))
+			dot(mat[0], vec),
+			dot(mat[1], vec),
+			dot(mat[2], vec),
+			dot(mat[3], vec)
 			);
 	}
 
 	template<typename T>
 	Matrix4x4<T> operator*(const Matrix4x4<T>& mat, T scaler){
 		return Matrix4x4<T>(mat[0] * scaler, mat[1] * scaler, mat[2] * scaler, mat[3] * scaler);
+	}
+
+	template<typename T>
+	Matrix4x4<T> operator*(T scaler, const Matrix4x4<T>& mat) {
+		return Matrix4x4<T>(scaler * mat[0], scaler * mat[1], scaler * mat[2], scaler * mat[3]);
 	}
 
 	template<typename T>

@@ -34,6 +34,12 @@ Vector3& operator op (const Vector3<U>& arg){\
 			return *this;
 		}
 
+		T Length() const {
+			return sqrt(x * x + y * y + z * z);
+		}
+		T LengthSq() const {
+			return dot(*this, *this);
+		}
 		VEC3_ONE_ARG_OPERATOR(+= );
 		VEC3_ONE_ARG_OPERATOR(-= );
 		VEC3_ONE_ARG_OPERATOR(*= );
